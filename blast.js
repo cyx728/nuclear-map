@@ -96,9 +96,7 @@
 
   /* ------------------------------------------------------------------- build */
   let built = false;
-  function build() {
-    if (built) return; built = true;
-
+  function buildLists() {
     PRESETS = weaponPresets();
     const wsel = el('simWeapon');
     wsel.innerHTML = PRESETS.map(g =>
@@ -118,6 +116,11 @@
       .sort((a, b) => (A().seriesAt(b, A().Y1) || 0) - (A().seriesAt(a, A().Y1) || 0));
     el('simArsenal').innerHTML = armed.map(iso =>
       `<option value="${iso}">${A().flagOf(iso)} ${esc(A().nameOf(iso))} — ${fmtInt(A().seriesAt(iso, A().Y1))} warheads</option>`).join('');
+  }
+  function build() {
+    if (built) return; built = true;
+    buildLists();
+    const wsel = el('simWeapon');
 
     // default weapon
     const w300 = presetByKey('USA:W87-0') || presetByKey('littleboy');
@@ -679,6 +682,14 @@
   function close() { S.open = false; el('simOverlay').classList.add('hidden'); }
 
   window.addEventListener('resize', () => { if (S.open) render(); });
+  window.addEventListener('nuke:languagechange', () => {
+    if (!built) return;
+    buildLists();
+    el('simWeapon').value = S.weaponKey;
+    el('simArsenal').value = S.arsenalIso;
+    syncTargetSelect();
+    if (S.open) render();
+  });
 
   /* ------------------------------------------------------------------ wiring */
   function init() {
