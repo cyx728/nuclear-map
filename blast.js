@@ -15,6 +15,8 @@
 (function () {
   const P = window.NukePhysics;
   const A = () => window.NukeApp;
+  const KM_PER_DEG_LAT = 110.57;
+  const KM_PER_DEG_LON = 111.32;
 
   const el = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -55,7 +57,8 @@
     hobM: null,          // null = the model's default optimised airburst height
     target: null,          // {n, lat, lon, pop, dens, iso3}
     arsenalIso: 'USA',
-    view: { spanKm: 60 },  // half-width of the local map, km
+    basemap: 'dark',
+    view: { spanKm: 60, centerLat: null, centerLon: null }, // half-width in km; viewport center is separate from ground zero
     open: false,
     lastEffects: null,
   };
@@ -162,9 +165,20 @@
       const v = el('simTarget').value;
       if (!v) return;
       const c = S._cities[parseInt(v.slice(1), 10)];
-      if (c) { S.target = c; fitToEffects(); render(); }
+      if (c) {
+        S.target = c;
+        setViewCenter(c.lat, c.lon);
+        fitToEffects();
+        render();
+      }
     });
     el('simArsenal').addEventListener('change', () => { S.arsenalIso = el('simArsenal').value; render(); });
+    el('simBasemap').addEventListener('click', e => {
+      const b = e.target.closest('.seg-b'); if (!b) return;
+      S.basemap = b.dataset.basemap;
+      el('simBasemap').querySelectorAll('.seg-b').forEach(x => x.classList.toggle('on', x === b));
+      render();
+    });
     el('simFallout').addEventListener('change', () => {
       S.fallout = el('simFallout').checked;
       if (S.fallout && S.burst === 'air') {
@@ -206,12 +220,41 @@
 
     const svg = el('simMap');
     svg.addEventListener('click', e => {
-      if (S.mode !== 'single') return;
+      if (S.mode !== 'single' || S._dragMoved) { S._dragMoved = false; return; }
       const p = svgToLatLon(e);
       if (!p) return;
       S.target = nearestCityOrPoint(p[0], p[1]);
+      setViewCenter(S.target.lat, S.target.lon);
       render();
     });
+    let drag = null;
+    svg.addEventListener('pointerdown', e => {
+      if (S.mode !== 'single' || e.button !== 0) return;
+      const c = viewCenter();
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, lat: c.lat, lon: c.lon, moved: false };
+      svg.setPointerCapture(e.pointerId);
+      svg.classList.add('dragging');
+    });
+    svg.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+      const cosLat = Math.max(0.12, Math.cos(drag.lat * Math.PI / 180));
+      setViewCenter(
+        drag.lat + dy * VB.kmPerPx / KM_PER_DEG_LAT,
+        drag.lon - dx * VB.kmPerPx / (KM_PER_DEG_LON * cosLat),
+      );
+      S._dragMoved = drag.moved;
+      render();
+    });
+    const endDrag = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      S._dragMoved = drag.moved;
+      drag = null;
+      svg.classList.remove('dragging');
+    };
+    svg.addEventListener('pointerup', endDrag);
+    svg.addEventListener('pointercancel', endDrag);
     svg.addEventListener('wheel', e => {
       e.preventDefault();
       S.view.spanKm = Math.max(0.5, Math.min(20000, S.view.spanKm * Math.exp(e.deltaY * 0.0014)));
@@ -241,7 +284,7 @@
   }
 
   /* --------------------------------------------------------------- projection */
-  /* Local equirectangular in kilometres, centred on the target. */
+  /* Local equirectangular kilometres, centred on the current map viewport. */
   let VB = { w: 1000, h: 700, cx: 500, cy: 350, kmPerPx: 1 };
   function measure() {
     const r = el('simMap').getBoundingClientRect();
@@ -250,24 +293,85 @@
     VB.kmPerPx = (S.view.spanKm * 2) / Math.min(VB.w, VB.h);
   }
   function project(lat, lon) {
-    const t = S.target || { lat: 0, lon: 0 };
+    const t = viewCenter();
     let dlon = lon - t.lon;
     while (dlon > 180) dlon -= 360;
     while (dlon < -180) dlon += 360;
-    const x = dlon * 111.32 * Math.cos(t.lat * Math.PI / 180);
-    const y = (lat - t.lat) * 110.57;
+    const x = dlon * KM_PER_DEG_LON * Math.cos(t.lat * Math.PI / 180);
+    const y = (lat - t.lat) * KM_PER_DEG_LAT;
     return [VB.cx + x / VB.kmPerPx, VB.cy - y / VB.kmPerPx];
   }
   function svgToLatLon(evt) {
     const svg = el('simMap'), r = svg.getBoundingClientRect();
     const px = evt.clientX - r.left, py = evt.clientY - r.top;
-    const t = S.target || { lat: 0, lon: 0 };
+    const t = viewCenter();
     const xKm = (px - VB.cx) * VB.kmPerPx, yKm = (VB.cy - py) * VB.kmPerPx;
-    const lat = t.lat + yKm / 110.57;
-    const lon = t.lon + xKm / (111.32 * Math.cos(t.lat * Math.PI / 180) || 1);
+    const lat = t.lat + yKm / KM_PER_DEG_LAT;
+    const lon = t.lon + xKm / (KM_PER_DEG_LON * Math.cos(t.lat * Math.PI / 180) || 1);
     return [Math.max(-85, Math.min(85, lat)), ((lon + 540) % 360) - 180];
   }
   const kmToPx = km => km / VB.kmPerPx;
+  function viewCenter() {
+    return {
+      lat: S.view.centerLat == null ? (S.target ? S.target.lat : 0) : S.view.centerLat,
+      lon: S.view.centerLon == null ? (S.target ? S.target.lon : 0) : S.view.centerLon,
+    };
+  }
+  function setViewCenter(lat, lon) {
+    S.view.centerLat = Math.max(-85, Math.min(85, lat));
+    S.view.centerLon = ((lon + 540) % 360) - 180;
+  }
+
+  /* OSM is a visual reference layer. Its Web Mercator tiles are positioned
+     from the viewport center and scaled from the same physical km-per-pixel value used
+     by the effect rings, so the radius labels never inherit tile units. */
+  function osmY(lat) {
+    const r = lat * Math.PI / 180;
+    return Math.log(Math.tan(Math.PI / 4 + r / 2));
+  }
+  function updateOsmTiles() {
+    const box = el('simOsmTiles'), attribution = el('simOsmAttribution');
+    if (!box || !attribution) return;
+    const on = S.basemap === 'osm';
+    box.classList.toggle('on', on); attribution.classList.toggle('on', on);
+    if (!on || !S.target) { box.replaceChildren(); return; }
+    const center = viewCenter();
+    const lat = Math.max(-85, Math.min(85, center.lat));
+    const lon = center.lon;
+    const cosLat = Math.max(0.12, Math.cos(lat * Math.PI / 180));
+    const circumferenceKm = 40075.016;
+    // One Web-Mercator world pixel is cos(latitude) times smaller on the
+    // ground than at the equator. Convert physical km-per-pixel explicitly.
+    const wantedWorldPx = circumferenceKm * cosLat / VB.kmPerPx;
+    const zoom = Math.max(0, Math.round(Math.log2(wantedWorldPx / 256)));
+    const world = 256 * Math.pow(2, zoom);
+    const cx = (lon + 180) / 360 * world;
+    const cy = (1 - osmY(lat) / Math.PI) / 2 * world;
+    const scale = circumferenceKm * cosLat / (world * VB.kmPerPx);
+    const left = VB.w / 2 - cx * scale;
+    const top = VB.h / 2 - cy * scale;
+    const minX = Math.floor((-left - 256 * scale) / (256 * scale));
+    const maxX = Math.ceil((VB.w - left + 256 * scale) / (256 * scale));
+    const minY = Math.floor((-top - 256 * scale) / (256 * scale));
+    const maxY = Math.ceil((VB.h - top + 256 * scale) / (256 * scale));
+    const frag = document.createDocumentFragment();
+    for (let tx = minX; tx <= maxX; tx++) {
+      const wrappedX = ((tx % Math.pow(2, zoom)) + Math.pow(2, zoom)) % Math.pow(2, zoom);
+      for (let ty = minY; ty <= maxY; ty++) {
+        if (ty < 0 || ty >= Math.pow(2, zoom)) continue;
+        const image = document.createElement('img');
+        image.alt = '';
+        image.loading = 'eager';
+        image.src = `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${ty}.png`;
+        image.style.left = `${left + tx * 256 * scale}px`;
+        image.style.top = `${top + ty * 256 * scale}px`;
+        image.style.width = `${256 * scale}px`;
+        image.style.height = `${256 * scale}px`;
+        frag.appendChild(image);
+      }
+    }
+    box.replaceChildren(frag);
+  }
 
   function fitToEffects() {
     const e = P.effects(S.yieldKt, S.burst, { windMph: S.windMph, hobM: S.burst === 'surface' ? 0 : S.hobM });
@@ -292,9 +396,9 @@
   function drawLand() {
     const rings = landPaths();
     if (!rings.length) return '';
-    const t = S.target || { lat: 0, lon: 0 };
-    const spanLat = (S.view.spanKm / 110.57) * 1.6;
-    const spanLon = (S.view.spanKm / (111.32 * Math.cos(t.lat * Math.PI / 180) || 1)) * 1.6;
+    const t = viewCenter();
+    const spanLat = (S.view.spanKm / KM_PER_DEG_LAT) * 1.6;
+    const spanLon = (S.view.spanKm / (KM_PER_DEG_LON * Math.cos(t.lat * Math.PI / 180) || 1)) * 1.6;
     let d = '';
     for (const ring of rings) {
       // cheap bbox reject
@@ -324,6 +428,7 @@
 
   function renderSingle() {
     if (!S.target) S.target = defaultTarget();
+    if (S.view.centerLat == null || S.view.centerLon == null) setViewCenter(S.target.lat, S.target.lon);
     syncTargetSelect();
     const eff = P.effects(S.yieldKt, S.burst, { windMph: S.windMph, hobM: S.burst === 'surface' ? 0 : S.hobM });
     S.lastEffects = eff;
@@ -332,17 +437,18 @@
     /* ---- map ---- */
     const svg = el('simMap');
     svg.setAttribute('viewBox', `0 0 ${VB.w} ${VB.h}`);
-    let s = `<rect x="0" y="0" width="${VB.w}" height="${VB.h}" fill="#060a0f"/>`;
-    s += drawLand();
+    const origin = project(S.target.lat, S.target.lon);
+    let s = S.basemap === 'osm' ? '' : `<rect x="0" y="0" width="${VB.w}" height="${VB.h}" fill="#060a0f"/>`;
+    s += S.basemap === 'osm' ? '' : drawLand();
 
     // distance grid
     const gridStep = niceStep(S.view.spanKm / 2.2);
     for (let k = gridStep; k <= S.view.spanKm * 1.5; k += gridStep) {
       const r = kmToPx(k);
       if (r < 16) continue;
-      s += `<circle class="sim-gridline" cx="${VB.cx}" cy="${VB.cy}" r="${r.toFixed(1)}"/>`;
-      const ly = VB.cy - r - 4;
-      if (ly > 12 && ly < VB.h - 8) s += `<text class="sim-city" x="${VB.cx}" y="${ly.toFixed(1)}" text-anchor="middle" opacity=".55">${fmtKm(k)}</text>`;
+      s += `<circle class="sim-gridline" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${r.toFixed(1)}"/>`;
+      const ly = origin[1] - r - 4;
+      if (ly > 12 && ly < VB.h - 8) s += `<text class="sim-city" x="${origin[0].toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" opacity=".55">${fmtKm(k)}</text>`;
     }
 
     // nearby cities
@@ -358,7 +464,7 @@
     // fallout first (underneath the rings)
     if (S.fallout && eff.fallout) {
       eff.fallout.slice().reverse().forEach((f, i) => {
-        s += falloutPath(f, 0.09 + i * 0.06);
+        s += falloutPath(f, origin, 0.09 + i * 0.06);
       });
     }
 
@@ -368,7 +474,7 @@
       const px = kmToPx(r.km);
       if (px < 0.6) return;
       const dim = r.key === 'rem500' && eff.radiationIrrelevant;
-      s += `<circle cx="${VB.cx}" cy="${VB.cy}" r="${px.toFixed(2)}" fill="${r.color}"` +
+      s += `<circle cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${px.toFixed(2)}" fill="${r.color}"` +
         ` fill-opacity="${dim ? 0.04 : (r.fill == null ? 0.10 : r.fill)}" stroke="${r.color}"` +
         ` stroke-width="${r.key === 'psi20' ? 2.4 : 1.8}" stroke-opacity="${dim ? 0.35 : 0.95}"` +
         (r.dash ? ` stroke-dasharray="${r.dash}"` : '') + '/>';
@@ -379,23 +485,24 @@
       const hr = h.rings.find(x => x.key === 'psi5');
       if (hr) {
         const px = kmToPx(hr.km);
-        s += `<circle cx="${VB.cx}" cy="${VB.cy}" r="${px.toFixed(2)}" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-dasharray="5 4" stroke-opacity=".85"/>`;
-        if (px > 22) s += `<text class="sim-city" x="${VB.cx + 4}" y="${(VB.cy - px - 4).toFixed(1)}" fill="#fff">Hiroshima's blast area</text>`;
+        s += `<circle cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${px.toFixed(2)}" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-dasharray="5 4" stroke-opacity=".85"/>`;
+        if (px > 22) s += `<text class="sim-city" x="${origin[0] + 4}" y="${(origin[1] - px - 4).toFixed(1)}" fill="#fff">Hiroshima's blast area</text>`;
       }
     }
     // ground zero
-    s += `<circle cx="${VB.cx}" cy="${VB.cy}" r="3" fill="#fff"/>`;
-    s += `<line x1="${VB.cx - 9}" y1="${VB.cy}" x2="${VB.cx + 9}" y2="${VB.cy}" stroke="#fff" stroke-width="1"/>`;
-    s += `<line x1="${VB.cx}" y1="${VB.cy - 9}" x2="${VB.cx}" y2="${VB.cy + 9}" stroke="#fff" stroke-width="1"/>`;
+    s += `<circle cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="3" fill="#fff"/>`;
+    s += `<line x1="${origin[0] - 9}" y1="${origin[1]}" x2="${origin[0] + 9}" y2="${origin[1]}" stroke="#fff" stroke-width="1"/>`;
+    s += `<line x1="${origin[0]}" y1="${origin[1] - 9}" x2="${origin[0]}" y2="${origin[1] + 9}" stroke="#fff" stroke-width="1"/>`;
     // wind arrow
     if (S.fallout && eff.fallout) {
       const a = (90 - S.windBearing) * Math.PI / 180;
       const L = Math.min(VB.w, VB.h) * 0.36;
-      const x2 = VB.cx + Math.cos(a) * L, y2 = VB.cy - Math.sin(a) * L;
-      s += `<line x1="${VB.cx}" y1="${VB.cy}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#c07cff" stroke-width="1.2" stroke-dasharray="4 4" opacity=".7"/>`;
+      const x2 = origin[0] + Math.cos(a) * L, y2 = origin[1] - Math.sin(a) * L;
+      s += `<line x1="${origin[0]}" y1="${origin[1]}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="#c07cff" stroke-width="1.2" stroke-dasharray="4 4" opacity=".7"/>`;
       s += `<text class="sim-city" x="${x2.toFixed(1)}" y="${(y2 - 6).toFixed(1)}" fill="#c07cff" text-anchor="middle">wind ${bearingName(S.windBearing)}</text>`;
     }
     svg.innerHTML = s;
+    updateOsmTiles();
     el('simScaleLabel').textContent = 'View ' + fmtKm(S.view.spanKm * 2) + ' across · click the map to move ground zero';
     el('simWindVal').textContent = bearingName(S.windBearing);
     el('simWindSpeedVal').textContent = S.windMph + ' mph';
@@ -509,7 +616,7 @@
   }
 
   /* Teardrop fallout plume, pointing downwind. */
-  function falloutPath(f, opacity) {
+  function falloutPath(f, origin, opacity) {
     const brg = S.windBearing;
     const a = (90 - brg) * Math.PI / 180;
     const ux = Math.cos(a), uy = -Math.sin(a);          // downwind unit vector in screen space
@@ -522,12 +629,12 @@
       const t = i / N;
       // teardrop half-width: rises quickly, tapers to a point downwind
       const hw = W * Math.pow(t, 0.42) * Math.pow(1 - t, 0.55) * 2.2;
-      pts.push([VB.cx + ux * L * t + vx * hw, VB.cy + uy * L * t + vy * hw]);
+      pts.push([origin[0] + ux * L * t + vx * hw, origin[1] + uy * L * t + vy * hw]);
     }
     for (let i = N; i >= 0; i--) {
       const t = i / N;
       const hw = W * Math.pow(t, 0.42) * Math.pow(1 - t, 0.55) * 2.2;
-      pts.push([VB.cx + ux * L * t - vx * hw, VB.cy + uy * L * t - vy * hw]);
+      pts.push([origin[0] + ux * L * t - vx * hw, origin[1] + uy * L * t - vy * hw]);
     }
     const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('') + 'Z';
     return `<path d="${d}" fill="#c07cff" fill-opacity="${opacity}" stroke="#c07cff" stroke-opacity="${(opacity * 2.6).toFixed(2)}" stroke-width="1"/>`;
@@ -581,7 +688,7 @@
     const W = VB.w, H = VB.h;
     const pw = Math.min(W / 360, H / 180);
     const px = lon => W / 2 + lon * pw, py = lat => H / 2 - lat * pw;
-    let s = `<rect x="0" y="0" width="${W}" height="${H}" fill="#060a0f"/>`;
+    let s = S.basemap === 'osm' ? '' : `<rect x="0" y="0" width="${W}" height="${H}" fill="#060a0f"/>`;
     const rings = landPaths();
     let d = '';
     for (const ring of rings) {
@@ -589,7 +696,7 @@
       for (let i = 0; i < ring.length; i += step) d += (i ? 'L' : 'M') + px(ring[i][0]).toFixed(1) + ',' + py(ring[i][1]).toFixed(1);
       d += 'Z';
     }
-    s += `<path class="sim-land" d="${d}"/>`;
+    if (S.basemap !== 'osm') s += `<path class="sim-land" d="${d}"/>`;
     strikes.forEach(st => {
       const x = px(st.city.lon), y = py(st.city.lat);
       const r = Math.max(1.6, st.psi5 * pw / 111.32);
@@ -599,6 +706,7 @@
     s += `<text class="sim-city" x="14" y="20" font-size="11">${esc(A().nameOf(iso))} · ${fmtInt(used)} warheads placed on the ${fmtInt(used)} largest cities</text>`;
     s += `<text class="sim-city" x="14" y="35" font-size="11" opacity=".75">Each circle is that city's blast-destruction radius, drawn to scale</text>`;
     svg.innerHTML = s;
+    updateOsmTiles();
 
     el('simScaleLabel').textContent = 'World view · each circle is a city inside the 5 psi blast radius';
     el('simLegend').innerHTML = '<div class="res-head" style="margin-bottom:6px">This is one arsenal</div>' +
@@ -667,10 +775,14 @@
     if (opts.iso) { S.arsenalIso = opts.iso; el('simArsenal').value = opts.iso; }
     if (opts.lat != null) {
       S.target = nearestCityOrPoint(opts.lat, opts.lon);
+      setViewCenter(S.target.lat, S.target.lon);
       if (opts.name) S.target.name = opts.name;
       el('simTarget').value = '';
     }
-    if (!S.target) S.target = defaultTarget();
+    if (!S.target) {
+      S.target = defaultTarget();
+      setViewCenter(S.target.lat, S.target.lon);
+    }
     if (opts.kt) {
       S.yieldKt = opts.kt; el('simYield').value = ktToSlider(opts.kt);
       S.weaponKey = 'custom'; el('simWeapon').value = 'custom';
@@ -687,6 +799,7 @@
     buildLists();
     el('simWeapon').value = S.weaponKey;
     el('simArsenal').value = S.arsenalIso;
+    el('simBasemap').querySelectorAll('.seg-b').forEach(x => x.classList.toggle('on', x.dataset.basemap === S.basemap));
     syncTargetSelect();
     if (S.open) render();
   });

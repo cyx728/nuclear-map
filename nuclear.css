@@ -405,14 +405,20 @@ a.src-tag:hover{background:rgba(255,255,255,.13); color:#fff}
 .res-km{color:#fff; font-weight:800; font-variant-numeric:tabular-nums; flex:none; text-align:right}
 .sim-cav{margin-top:14px; padding-top:12px; border-top:1px solid var(--line); font-size:10.5px; line-height:1.55; color:#7d8e9c}
 .sim-mapwrap{flex:1; position:relative; background:#060a0f; min-width:0}
-#simMap{position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; display:block}
-.sim-mapbar{position:absolute; left:12px; bottom:12px; right:12px; display:flex; align-items:center; justify-content:space-between; pointer-events:none}
+#simOsmTiles{position:absolute; inset:0; z-index:1; overflow:hidden; display:none; background:#d8e2e8}
+#simOsmTiles.on{display:block}
+#simOsmTiles img{position:absolute; width:256px; height:256px; max-width:none; user-select:none; pointer-events:none}
+#simMap{position:absolute; inset:0; z-index:2; width:100%; height:100%; cursor:grab; display:block; touch-action:none}
+#simMap.dragging{cursor:grabbing}
+.sim-osm-attribution{position:absolute; right:9px; bottom:9px; z-index:3; display:none; padding:3px 6px; color:#26343d; background:rgba(255,255,255,.78); border-radius:4px; font-size:9px; line-height:1.2; pointer-events:none}
+.sim-osm-attribution.on{display:block}
+.sim-mapbar{position:absolute; left:12px; bottom:12px; right:12px; z-index:4; display:flex; align-items:center; justify-content:space-between; pointer-events:none}
 .sim-scale{font-size:11px; color:#c8d6e0; background:rgba(6,10,14,.8); border:1px solid var(--line); border-radius:8px; padding:5px 10px; font-variant-numeric:tabular-nums}
 .sim-mapzoom{display:flex; gap:5px; pointer-events:auto}
 .sim-mapzoom button{width:30px; height:30px; border-radius:8px; cursor:pointer; font-size:15px; font-weight:700; line-height:1;
   background:rgba(6,10,14,.85); color:var(--txt); border:1px solid var(--line)}
 .sim-mapzoom button:hover{background:rgba(34,46,60,.95); border-color:var(--accent)}
-.sim-legend{position:absolute; right:12px; top:54px; width:196px; padding:10px 12px; border-radius:11px; background:rgba(6,10,14,.86);
+.sim-legend{position:absolute; right:12px; top:54px; z-index:4; width:196px; padding:10px 12px; border-radius:11px; background:rgba(6,10,14,.86);
   border:1px solid var(--line); backdrop-filter:blur(6px); font-size:11px}
 .sl-row{display:flex; align-items:center; gap:8px; padding:3px 0; color:#c8d6e0}
 .sl-sw{width:11px; height:11px; border-radius:50%; flex:none; box-shadow:0 0 6px currentColor}

@@ -9628,5 +9628,8 @@
   "affected": "被災地域",
   "An interactive globe of every nuclear weapon on Earth: who has them, how many, where they are stored, what they could do — and how the arsenals rose and fell from 1945 to 2026.": "世界の核兵器を示すインタラクティブな地球儀。保有国、数量、保管場所、影響、1945 年から 2026 年までの核戦力の変遷を表示します。",
   "Every nuclear weapon on Earth: who has them, how many, where they are kept, and what they would do — from 1938 to 2026.": "世界の核兵器：保有国、数量、保管場所、影響。1938 年から 2026 年まで。",
-  "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "すべての核弾頭と施設、1945–2026。Glasstone と Dolan の公開スケーリング式に基づく爆発シミュレーター付き。"
+  "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "すべての核弾頭と施設、1945–2026。Glasstone と Dolan の公開スケーリング式に基づく爆発シミュレーター付き。",
+  "Base map": "ベースマップ",
+  "Dark map": "ダークマップ",
+  "OpenStreetMap": "OpenStreetMap"
 }

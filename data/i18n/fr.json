@@ -9628,5 +9628,8 @@
   "affected": "zone touchée",
   "An interactive globe of every nuclear weapon on Earth: who has them, how many, where they are stored, what they could do — and how the arsenals rose and fell from 1945 to 2026.": "Un globe interactif des armes nucléaires : détenteurs, quantités, stockage, effets et évolution des arsenaux de 1945 à 2026.",
   "Every nuclear weapon on Earth: who has them, how many, where they are kept, and what they would do — from 1938 to 2026.": "Toutes les armes nucléaires : détenteurs, quantités, lieux de stockage et effets, de 1938 à 2026.",
-  "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "Chaque ogive et chaque site, 1945–2026, avec un simulateur fondé sur les équations publiées de Glasstone et Dolan."
+  "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "Chaque ogive et chaque site, 1945–2026, avec un simulateur fondé sur les équations publiées de Glasstone et Dolan.",
+  "Base map": "Fond de carte",
+  "Dark map": "Carte sombre",
+  "OpenStreetMap": "OpenStreetMap"
 }

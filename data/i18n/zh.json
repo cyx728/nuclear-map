@@ -9628,5 +9628,8 @@
   "affected": "受影响地区",
   "An interactive globe of every nuclear weapon on Earth: who has them, how many, where they are stored, what they could do — and how the arsenals rose and fell from 1945 to 2026.": "通过交互式地球查看全球核武器：由谁拥有、数量多少、存放何处、可能造成什么影响，以及 1945 至 2026 年核武库的增减。",
   "Every nuclear weapon on Earth: who has them, how many, where they are kept, and what they would do — from 1938 to 2026.": "全球核武器：由谁拥有、数量多少、存放何处、可能产生什么影响，覆盖 1938 至 2026 年。",
-  "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "每枚弹头、每处设施，1945–2026；附基于 Glasstone 与 Dolan 公开比例方程的核爆模拟器。"
+  "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "每枚弹头、每处设施，1945–2026；附基于 Glasstone 与 Dolan 公开比例方程的核爆模拟器。",
+  "Base map": "底图",
+  "Dark map": "深色地图",
+  "OpenStreetMap": "OpenStreetMap"
 }

@@ -221,6 +221,14 @@
         </div>
 
         <div class="sim-group">
+          <label class="sim-lab">Base map</label>
+          <div class="seg" id="simBasemap">
+            <button class="seg-b on" data-basemap="dark">Dark map</button>
+            <button class="seg-b" data-basemap="osm">OpenStreetMap</button>
+          </div>
+        </div>
+
+        <div class="sim-group">
           <label class="sim-lab">Burst</label>
           <div class="seg" id="simBurst">
             <button class="seg-b on" data-burst="air">Airburst</button>
@@ -256,6 +264,7 @@
       </div>
 
       <div class="sim-mapwrap">
+        <div id="simOsmTiles" aria-hidden="true"></div>
         <svg id="simMap" xmlns="http://www.w3.org/2000/svg"></svg>
         <div class="sim-mapbar">
           <span id="simScaleLabel" class="sim-scale">—</span>
@@ -266,6 +275,7 @@
           </span>
         </div>
         <div id="simLegend" class="sim-legend"></div>
+        <div id="simOsmAttribution" class="sim-osm-attribution">© OpenStreetMap contributors</div>
       </div>
     </div>
   </div>
