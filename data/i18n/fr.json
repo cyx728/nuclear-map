@@ -9631,5 +9631,10 @@
   "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "Chaque ogive et chaque site, 1945–2026, avec un simulateur fondé sur les équations publiées de Glasstone et Dolan.",
   "Base map": "Fond de carte",
   "Dark map": "Carte sombre",
-  "OpenStreetMap": "OpenStreetMap"
+  "OpenStreetMap": "OpenStreetMap",
+  "Simulate detonation": "Simuler la détonation",
+  "Replay detonation": "Rejouer la détonation",
+  "Detonating...": "Détonation en cours…",
+  "Ready": "Prêt",
+  "Clear map effects": "Effacer les effets de la carte"
 }

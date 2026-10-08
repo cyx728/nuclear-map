@@ -17,6 +17,12 @@
   const A = () => window.NukeApp;
   const KM_PER_DEG_LAT = 110.57;
   const KM_PER_DEG_LON = 111.32;
+  const PERSISTENT_EFFECTS_KEY = 'nuke_simulator_effects_v1';
+  // The public OSM standard tile endpoint currently publishes native tiles up to z19.
+  // Below this span we keep zooming the z19 source pixels client-side instead of
+  // requesting unsupported z20+ URLs.
+  const OSM_MAX_ZOOM = 19;
+  const MIN_VIEW_SPAN_KM = 0.08;
 
   const el = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -43,6 +49,22 @@
   const BEARING_NAMES = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
   const bearingName = b => BEARING_NAMES[Math.round(((b % 360) + 360) % 360 / 45) % 8];
 
+  function loadPersistentDetonations() {
+    try {
+      const value = JSON.parse(localStorage.getItem(PERSISTENT_EFFECTS_KEY) || '[]');
+      return Array.isArray(value) ? value.filter(d => d && Number.isFinite(d.lat) && Number.isFinite(d.lon) && Array.isArray(d.rings)) : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function storePersistentDetonations(items) {
+    try {
+      if (items.length) localStorage.setItem(PERSISTENT_EFFECTS_KEY, JSON.stringify(items));
+      else localStorage.removeItem(PERSISTENT_EFFECTS_KEY);
+    } catch (error) { /* Persistence is optional when browser storage is unavailable. */ }
+  }
+
   /* ------------------------------------------------------------------ state */
   const S = {
     mode: 'single',
@@ -61,6 +83,11 @@
     view: { spanKm: 60, centerLat: null, centerLon: null }, // half-width in km; viewport center is separate from ground zero
     open: false,
     lastEffects: null,
+    detonationPhase: 'idle',
+    detonationTimer: null,
+    detonationToken: 0,
+    persistentDetonations: loadPersistentDetonations(),
+    effectsCleared: false,
   };
 
   /* ------------------------------------------------------------- weapon list */
@@ -147,6 +174,7 @@
     });
     el('simMode').addEventListener('click', e => {
       const b = e.target.closest('.seg-b'); if (!b) return;
+      resetDetonation();
       S.mode = b.dataset.mode;
       el('simMode').querySelectorAll('.seg-b').forEach(x => x.classList.toggle('on', x === b));
       el('simWeaponGroup').style.display = S.mode === 'single' ? '' : 'none';
@@ -206,15 +234,17 @@
       }
       render();
     });
-    el('simZoomIn').addEventListener('click', () => { S.view.spanKm = Math.max(0.5, S.view.spanKm / 1.6); render(); });
+    el('simZoomIn').addEventListener('click', () => { S.view.spanKm = Math.max(MIN_VIEW_SPAN_KM, S.view.spanKm / 1.6); render(); });
     el('simZoomOut').addEventListener('click', () => { S.view.spanKm = Math.min(20000, S.view.spanKm * 1.6); render(); });
     el('simFit').addEventListener('click', () => { fitToEffects(); render(); });
+    el('simDetonate').addEventListener('click', triggerDetonation);
+    el('simClearEffects').addEventListener('click', clearMapEffects);
     el('simClose').addEventListener('click', close);
     el('simOverlay').addEventListener('click', e => { if (e.target.id === 'simOverlay') close(); });
     document.addEventListener('keydown', e => {
       if (!S.open) return;
       if (e.key === 'Escape') { close(); e.preventDefault(); }
-      if (e.key === '+' || e.key === '=') { S.view.spanKm /= 1.6; render(); }
+      if (e.key === '+' || e.key === '=') { S.view.spanKm = Math.max(MIN_VIEW_SPAN_KM, S.view.spanKm / 1.6); render(); }
       if (e.key === '-') { S.view.spanKm *= 1.6; render(); }
     });
 
@@ -257,7 +287,7 @@
     svg.addEventListener('pointercancel', endDrag);
     svg.addEventListener('wheel', e => {
       e.preventDefault();
-      S.view.spanKm = Math.max(0.5, Math.min(20000, S.view.spanKm * Math.exp(e.deltaY * 0.0014)));
+      S.view.spanKm = Math.max(MIN_VIEW_SPAN_KM, Math.min(20000, S.view.spanKm * Math.exp(e.deltaY * 0.0014)));
       render();
     }, { passive: false });
   }
@@ -343,30 +373,41 @@
     // One Web-Mercator world pixel is cos(latitude) times smaller on the
     // ground than at the equator. Convert physical km-per-pixel explicitly.
     const wantedWorldPx = circumferenceKm * cosLat / VB.kmPerPx;
-    const zoom = Math.max(0, Math.round(Math.log2(wantedWorldPx / 256)));
+    const zoom = Math.min(OSM_MAX_ZOOM, Math.max(0, Math.round(Math.log2(wantedWorldPx / 256))));
     const world = 256 * Math.pow(2, zoom);
     const cx = (lon + 180) / 360 * world;
     const cy = (1 - osmY(lat) / Math.PI) / 2 * world;
     const scale = circumferenceKm * cosLat / (world * VB.kmPerPx);
     const left = VB.w / 2 - cx * scale;
     const top = VB.h / 2 - cy * scale;
-    const minX = Math.floor((-left - 256 * scale) / (256 * scale));
-    const maxX = Math.ceil((VB.w - left + 256 * scale) / (256 * scale));
-    const minY = Math.floor((-top - 256 * scale) / (256 * scale));
-    const maxY = Math.ceil((VB.h - top + 256 * scale) / (256 * scale));
+    const tileSize = 256 * scale;
+    const minX = Math.floor(-left / tileSize);
+    const maxX = Math.floor((VB.w - left) / tileSize);
+    const minY = Math.floor(-top / tileSize);
+    const maxY = Math.floor((VB.h - top) / tileSize);
+    const existing = new Map(Array.from(box.querySelectorAll('img')).map(image => [image.dataset.key, image]));
     const frag = document.createDocumentFragment();
     for (let tx = minX; tx <= maxX; tx++) {
       const wrappedX = ((tx % Math.pow(2, zoom)) + Math.pow(2, zoom)) % Math.pow(2, zoom);
       for (let ty = minY; ty <= maxY; ty++) {
         if (ty < 0 || ty >= Math.pow(2, zoom)) continue;
-        const image = document.createElement('img');
-        image.alt = '';
-        image.loading = 'eager';
-        image.src = `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${ty}.png`;
+        const key = `${zoom}/${wrappedX}/${ty}`;
+        let image = existing.get(key);
+        if (image) existing.delete(key);
+        else {
+          image = document.createElement('img');
+          image.alt = '';
+          image.loading = 'eager';
+          image.decoding = 'async';
+          image.dataset.key = key;
+          image.dataset.zoom = String(zoom);
+          image.src = `https://tile.openstreetmap.org/${key}.png`;
+        }
         image.style.left = `${left + tx * 256 * scale}px`;
         image.style.top = `${top + ty * 256 * scale}px`;
-        image.style.width = `${256 * scale}px`;
-        image.style.height = `${256 * scale}px`;
+        // A fractional CSS pixel of overlap prevents seams at non-integer scales.
+        image.style.width = `${tileSize + 0.5}px`;
+        image.style.height = `${tileSize + 0.5}px`;
         frag.appendChild(image);
       }
     }
@@ -377,7 +418,7 @@
     const e = P.effects(S.yieldKt, S.burst, { windMph: S.windMph, hobM: S.burst === 'surface' ? 0 : S.hobM });
     let span = e.maxKm * 1.35;
     if (S.fallout && e.fallout && e.fallout.length) span = Math.max(span, e.fallout[e.fallout.length - 1].downwindKm * 0.62);
-    S.view.spanKm = Math.max(0.6, span);
+    S.view.spanKm = Math.max(MIN_VIEW_SPAN_KM, span);
   }
 
   /* ----------------------------------------------------------------- land */
@@ -426,6 +467,80 @@
     renderSingle();
   }
 
+  function resetDetonation() {
+    if (S.detonationTimer) clearTimeout(S.detonationTimer);
+    S.detonationTimer = null;
+    S.detonationToken++;
+    S.detonationPhase = 'idle';
+    updateDetonationControl();
+  }
+
+  function updateDetonationControl() {
+    const wrap = el('simDetonationControl'), button = el('simDetonate');
+    if (!wrap || !button) return;
+    wrap.hidden = S.mode !== 'single';
+    const active = S.detonationPhase === 'animating';
+    const replay = S.detonationPhase === 'settled';
+    button.disabled = active;
+    button.classList.toggle('is-active', active);
+    button.classList.toggle('is-settled', replay);
+    button.querySelector('.sim-detonate-label').textContent = replay ? 'Replay detonation' : 'Simulate detonation';
+    el('simDetonateStatus').textContent = active ? 'Detonating...' : 'Ready';
+    const clear = el('simClearEffects');
+    clear.hidden = S.persistentDetonations.length === 0;
+    clear.disabled = active;
+  }
+
+  function detonationSignature(target, yieldKt, burst, fallout, windBearing) {
+    return [target.lat.toFixed(5), target.lon.toFixed(5), yieldKt, burst, fallout ? windBearing : 'none'].join('|');
+  }
+
+  function savePersistentDetonation() {
+    const eff = P.effects(S.yieldKt, S.burst, { windMph: S.windMph, hobM: S.burst === 'surface' ? 0 : S.hobM });
+    const snapshot = {
+      signature: detonationSignature(S.target, S.yieldKt, S.burst, S.fallout, S.windBearing),
+      lat: S.target.lat,
+      lon: S.target.lon,
+      yieldKt: S.yieldKt,
+      burst: S.burst,
+      windBearing: S.windBearing,
+      rings: eff.rings.filter(r => S.advanced || !r.adv).map(r => Object.assign({}, r)),
+      crater: eff.crater ? Object.assign({}, eff.crater) : null,
+      fallout: S.fallout && eff.fallout ? eff.fallout.map(f => Object.assign({}, f)) : null,
+    };
+    const i = S.persistentDetonations.findIndex(d => d.signature === snapshot.signature);
+    if (i >= 0) S.persistentDetonations[i] = snapshot;
+    else S.persistentDetonations.push(snapshot);
+    storePersistentDetonations(S.persistentDetonations);
+  }
+
+  function clearMapEffects() {
+    if (S.detonationPhase === 'animating') return;
+    S.persistentDetonations.length = 0;
+    storePersistentDetonations(S.persistentDetonations);
+    S.effectsCleared = true;
+    S.detonationPhase = 'idle';
+    render();
+  }
+
+  function triggerDetonation() {
+    if (S.mode !== 'single' || S.detonationPhase === 'animating') return;
+    if (!S.target) S.target = defaultTarget();
+    if (S.detonationTimer) clearTimeout(S.detonationTimer);
+    const token = ++S.detonationToken;
+    S.effectsCleared = false;
+    savePersistentDetonation();
+    S.detonationPhase = 'animating';
+    render();
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    S.detonationTimer = setTimeout(() => {
+      if (token !== S.detonationToken) return;
+      S.detonationTimer = null;
+      S.detonationPhase = 'settled';
+      render();
+    }, reduced ? 650 : 2800);
+  }
+
   function renderSingle() {
     if (!S.target) S.target = defaultTarget();
     if (S.view.centerLat == null || S.view.centerLon == null) setViewCenter(S.target.lat, S.target.lon);
@@ -440,6 +555,11 @@
     const origin = project(S.target.lat, S.target.lon);
     let s = S.basemap === 'osm' ? '' : `<rect x="0" y="0" width="${VB.w}" height="${VB.h}" fill="#060a0f"/>`;
     s += S.basemap === 'osm' ? '' : drawLand();
+    s += `<defs>` +
+      `<radialGradient id="simFireballGradient"><stop offset="0" stop-color="#fff"/><stop offset=".2" stop-color="#fffbd0"/><stop offset=".52" stop-color="#ffcf43"/><stop offset=".78" stop-color="#ff641f"/><stop offset="1" stop-color="#7c1209" stop-opacity="0"/></radialGradient>` +
+      `<radialGradient id="simCraterGradient"><stop offset="0" stop-color="#080909"/><stop offset=".64" stop-color="#1a1713"/><stop offset=".82" stop-color="#5e4a35"/><stop offset="1" stop-color="#d6b379" stop-opacity=".18"/></radialGradient>` +
+      `<filter id="simHotBlur" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="5"/></filter>` +
+      `</defs>`;
 
     // distance grid
     const gridStep = niceStep(S.view.spanKm / 2.2);
@@ -461,26 +581,76 @@
       s += `<text class="sim-city" x="${(p[0] + 5).toFixed(1)}" y="${(p[1] + 3).toFixed(1)}">${esc(c.name)}</text>`;
     });
 
+    // Completed detonations stay tied to their original coordinates. The
+    // matching live preview is skipped to avoid drawing the same event twice.
+    const currentSignature = detonationSignature(S.target, S.yieldKt, S.burst, S.fallout, S.windBearing);
+    S.persistentDetonations.forEach(d => {
+      if (d.signature === currentSignature && !S.effectsCleared) return;
+      const savedOrigin = project(d.lat, d.lon);
+      s += `<g class="sim-persistent-effect">`;
+      if (d.fallout) d.fallout.slice().reverse().forEach((f, i) => {
+        s += falloutPath(f, savedOrigin, 0.07 + i * 0.045, d.windBearing, 'sim-persistent-fallout');
+      });
+      d.rings.forEach(r => {
+        const px = kmToPx(r.km);
+        if (px < 0.6) return;
+        s += `<circle class="sim-persistent-ring" cx="${savedOrigin[0].toFixed(1)}" cy="${savedOrigin[1].toFixed(1)}" r="${px.toFixed(2)}" fill="${r.color}" fill-opacity="${Math.min(.08, r.fill == null ? .07 : r.fill * .62)}" stroke="${r.color}" stroke-width="1.4" stroke-opacity=".72"${r.dash ? ` stroke-dasharray="${r.dash}"` : ''}/>`;
+      });
+      if (d.burst === 'surface' && d.crater) s += craterMarkup(savedOrigin, d.crater, 'sim-persistent-crater');
+      s += `</g>`;
+    });
+
     // fallout first (underneath the rings)
-    if (S.fallout && eff.fallout) {
+    if (!S.effectsCleared && S.fallout && eff.fallout) {
       eff.fallout.slice().reverse().forEach((f, i) => {
         s += falloutPath(f, origin, 0.09 + i * 0.06);
       });
     }
 
+    // A crater is only physically meaningful for a surface burst. Its map size
+    // uses the same kilometre-to-pixel conversion as every other effect layer.
+    if (!S.effectsCleared && S.burst === 'surface' && eff.crater) {
+      const craterAnim = S.detonationPhase === 'animating' ? ' detonating' : '';
+      s += craterMarkup(origin, eff.crater, craterAnim.trim());
+    }
+
     // effect rings, largest first
     const rings = eff.rings.filter(r => S.advanced || !r.adv);
-    rings.forEach(r => {
+    const ringOrder = rings.slice().sort((a, b) => a.km - b.km);
+    if (!S.effectsCleared) rings.forEach(r => {
       const px = kmToPx(r.km);
       if (px < 0.6) return;
       const dim = r.key === 'rem500' && eff.radiationIrrelevant;
-      s += `<circle cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${px.toFixed(2)}" fill="${r.color}"` +
+      const delay = 320 + ringOrder.indexOf(r) * 170;
+      const anim = S.detonationPhase === 'animating' ? ' sim-effect-ring detonating' : ' sim-effect-ring';
+      s += `<circle class="${anim.trim()}" style="--ring-delay:${delay}ms;transform-origin:${origin[0].toFixed(1)}px ${origin[1].toFixed(1)}px" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${px.toFixed(2)}" fill="${r.color}"` +
         ` fill-opacity="${dim ? 0.04 : (r.fill == null ? 0.10 : r.fill)}" stroke="${r.color}"` +
         ` stroke-width="${r.key === 'psi20' ? 2.4 : 1.8}" stroke-opacity="${dim ? 0.35 : 0.95}"` +
         (r.dash ? ` stroke-dasharray="${r.dash}"` : '') + '/>';
     });
+    if (S.detonationPhase === 'animating') {
+      const fireball = rings.find(r => r.key === 'fireball');
+      const fireballPx = Math.max(5, fireball ? kmToPx(fireball.km) : 8);
+      const shockPx = Math.min(Math.hypot(VB.w, VB.h) * 0.72, Math.max.apply(null, rings.map(r => kmToPx(r.km))));
+      const debris = Array.from({ length: 22 }, (_, i) => {
+        const a = i * 2.39996;
+        const spread = Math.min(shockPx * (0.23 + (i % 5) * 0.045), 160);
+        const dx = Math.cos(a) * spread, dy = Math.sin(a) * spread;
+        const radius = 1.1 + (i % 4) * 0.55;
+        return `<circle class="sim-debris" style="--dx:${dx.toFixed(1)}px;--dy:${dy.toFixed(1)}px;--debris-delay:${(90 + (i % 7) * 34)}ms" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${radius.toFixed(1)}"/>`;
+      }).join('');
+      s += `<g class="sim-detonation-layer" style="transform-origin:${origin[0].toFixed(1)}px ${origin[1].toFixed(1)}px">` +
+        `<circle class="sim-flash-halo" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${Math.max(70, fireballPx * 5).toFixed(1)}"/>` +
+        `<circle class="sim-flash-core" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${Math.max(12, fireballPx * 1.35).toFixed(1)}"/>` +
+        `<circle class="sim-fireball-bloom" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${fireballPx.toFixed(2)}"/>` +
+        `<circle class="sim-dustwave" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${Math.min(shockPx * .62, 260).toFixed(1)}"/>` +
+        `<circle class="sim-shockwave sim-shockwave-a" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${shockPx.toFixed(1)}"/>` +
+        `<circle class="sim-shockwave sim-shockwave-b" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${shockPx.toFixed(1)}"/>` +
+        debris +
+        `</g>`;
+    }
     // comparison: Hiroshima footprint
-    if (S.compare) {
+    if (!S.effectsCleared && S.compare) {
       const h = P.effects(15, 'air');
       const hr = h.rings.find(x => x.key === 'psi5');
       if (hr) {
@@ -502,7 +672,9 @@
       s += `<text class="sim-city" x="${x2.toFixed(1)}" y="${(y2 - 6).toFixed(1)}" fill="#c07cff" text-anchor="middle">wind ${bearingName(S.windBearing)}</text>`;
     }
     svg.innerHTML = s;
+    svg.classList.toggle('is-detonating', S.detonationPhase === 'animating');
     updateOsmTiles();
+    updateDetonationControl();
     el('simScaleLabel').textContent = 'View ' + fmtKm(S.view.spanKm * 2) + ' across · click the map to move ground zero';
     el('simWindVal').textContent = bearingName(S.windBearing);
     el('simWindSpeedVal').textContent = S.windMph + ' mph';
@@ -616,8 +788,16 @@
   }
 
   /* Teardrop fallout plume, pointing downwind. */
-  function falloutPath(f, origin, opacity) {
-    const brg = S.windBearing;
+  function craterMarkup(origin, crater, extraClass) {
+    const craterPx = Math.max(2.2, kmToPx(crater.radius));
+    return `<g class="sim-crater${extraClass ? ' ' + extraClass : ''}" style="transform-origin:${origin[0].toFixed(1)}px ${origin[1].toFixed(1)}px">` +
+      `<circle class="sim-crater-rim" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${(craterPx * 1.34).toFixed(2)}"/>` +
+      `<circle class="sim-crater-core" cx="${origin[0].toFixed(1)}" cy="${origin[1].toFixed(1)}" r="${craterPx.toFixed(2)}"/>` +
+      `</g>`;
+  }
+
+  function falloutPath(f, origin, opacity, bearing, className) {
+    const brg = bearing == null ? S.windBearing : bearing;
     const a = (90 - brg) * Math.PI / 180;
     const ux = Math.cos(a), uy = -Math.sin(a);          // downwind unit vector in screen space
     const vx = -uy, vy = ux;                            // perpendicular
@@ -637,11 +817,12 @@
       pts.push([origin[0] + ux * L * t - vx * hw, origin[1] + uy * L * t - vy * hw]);
     }
     const d = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('') + 'Z';
-    return `<path d="${d}" fill="#c07cff" fill-opacity="${opacity}" stroke="#c07cff" stroke-opacity="${(opacity * 2.6).toFixed(2)}" stroke-width="1"/>`;
+    return `<path${className ? ` class="${className}"` : ''} d="${d}" fill="#c07cff" fill-opacity="${opacity}" stroke="#c07cff" stroke-opacity="${(opacity * 2.6).toFixed(2)}" stroke-width="1"/>`;
   }
 
   /* --------------------------------------------------------- arsenal mode */
   function renderArsenal() {
+    updateDetonationControl();
     const iso = S.arsenalIso;
     const n = A().seriesAt(iso, A().Y1) || 0;
     const types = (A().WTYPES || []).filter(w => w.iso3 === iso && w.kt && w.count);
@@ -765,6 +946,7 @@
   function open(opts) {
     build();
     opts = opts || {};
+    resetDetonation();
     S.open = true;
     if (opts.mode) {
       S.mode = opts.mode;
@@ -791,7 +973,11 @@
     if (S.mode === 'single' && opts.fit !== false) fitToEffects();
     requestAnimationFrame(() => { measure(); render(); });
   }
-  function close() { S.open = false; el('simOverlay').classList.add('hidden'); }
+  function close() {
+    resetDetonation();
+    S.open = false;
+    el('simOverlay').classList.add('hidden');
+  }
 
   window.addEventListener('resize', () => { if (S.open) render(); });
   window.addEventListener('nuke:languagechange', () => {

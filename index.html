@@ -259,6 +259,18 @@
           <label class="sim-check"><input type="checkbox" id="simCompare"> <span>Compare with Hiroshima</span></label>
         </div>
 
+        <div class="sim-detonation-control" id="simDetonationControl">
+          <button class="sim-detonate" id="simDetonate" type="button" aria-describedby="simDetonateStatus">
+            <span class="sim-detonate-lamp" aria-hidden="true"></span>
+            <span class="sim-detonate-mark" aria-hidden="true">+</span>
+            <span class="sim-detonate-copy">
+              <span class="sim-detonate-label">Simulate detonation</span>
+              <span class="sim-detonate-status" id="simDetonateStatus" aria-live="polite">Ready</span>
+            </span>
+          </button>
+          <button class="sim-clear-effects" id="simClearEffects" type="button" hidden>Clear map effects</button>
+        </div>
+
         <div class="sim-results" id="simResults"></div>
         <div class="sim-cav" id="simCaveat"></div>
       </div>

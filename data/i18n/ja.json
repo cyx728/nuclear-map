@@ -9631,5 +9631,10 @@
   "Every warhead, every site, 1945–2026 — plus a detonation simulator built on the published Glasstone & Dolan scaling equations.": "すべての核弾頭と施設、1945–2026。Glasstone と Dolan の公開スケーリング式に基づく爆発シミュレーター付き。",
   "Base map": "ベースマップ",
   "Dark map": "ダークマップ",
-  "OpenStreetMap": "OpenStreetMap"
+  "OpenStreetMap": "OpenStreetMap",
+  "Simulate detonation": "起爆をシミュレート",
+  "Replay detonation": "起爆を再生",
+  "Detonating...": "起爆中…",
+  "Ready": "準備完了",
+  "Clear map effects": "地図上の影響を消去"
 }
